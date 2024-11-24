@@ -19,25 +19,25 @@ type Masker struct {
 }
 
 func init() {
-	masker := mask.NewMasker()
-	masker.RegisterMaskStringFunc(mask.MaskTypeHash, masker.MaskHashString)
-	masker.RegisterMaskStringFunc(mask.MaskTypeFixed, masker.MaskFixedString)
-	masker.RegisterMaskStringFunc(mask.MaskTypeFilled, masker.MaskFilledString)
+	msk := mask.NewMasker()
+	msk.RegisterMaskStringFunc(mask.MaskTypeHash, msk.MaskHashString)
+	msk.RegisterMaskStringFunc(mask.MaskTypeFixed, msk.MaskFixedString)
+	msk.RegisterMaskStringFunc(mask.MaskTypeFilled, msk.MaskFilledString)
 
-	masker.RegisterMaskIntFunc(mask.MaskTypeRandom, masker.MaskRandomInt)
-	masker.RegisterMaskFloat64Func(mask.MaskTypeRandom, masker.MaskRandomFloat64)
-	masker.RegisterMaskAnyFunc(mask.MaskTypeZero, masker.MaskZero)
+	msk.RegisterMaskIntFunc(mask.MaskTypeRandom, msk.MaskRandomInt)
+	msk.RegisterMaskFloat64Func(mask.MaskTypeRandom, msk.MaskRandomFloat64)
+	msk.RegisterMaskAnyFunc(mask.MaskTypeZero, msk.MaskZero)
 
-	masker.RegisterMaskField("Password", "filled4")
-	masker.RegisterMaskField("password", "filled4")
+	msk.RegisterMaskField("Password", "filled4")
+	msk.RegisterMaskField("password", "filled4")
 
-	masker.RegisterMaskField("SigningKey", "filled32")
-	masker.RegisterMaskField("signing_key", "filled32")
+	msk.RegisterMaskField("SigningKey", "filled32")
+	msk.RegisterMaskField("signing_key", "filled32")
 
-	masker.RegisterMaskField("Authorization", "filled32")
-	masker.RegisterMaskField("authorization", "filled32")
+	msk.RegisterMaskField("Authorization", "filled32")
+	msk.RegisterMaskField("authorization", "filled32")
 
-	Default = &Masker{masker: masker}
+	Default = &Masker{masker: msk}
 }
 
 func Mask[T any](target T) (ret T, err error) {
