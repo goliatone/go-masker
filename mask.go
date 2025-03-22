@@ -23,6 +23,7 @@ func init() {
 	msk.RegisterMaskStringFunc(mask.MaskTypeHash, msk.MaskHashString)
 	msk.RegisterMaskStringFunc(mask.MaskTypeFixed, msk.MaskFixedString)
 	msk.RegisterMaskStringFunc(mask.MaskTypeFilled, msk.MaskFilledString)
+	msk.RegisterMaskStringFunc(MaskTypePreserveEnds, MaskPreserveEnds)
 
 	msk.RegisterMaskIntFunc(mask.MaskTypeRandom, msk.MaskRandomInt)
 	msk.RegisterMaskFloat64Func(mask.MaskTypeRandom, msk.MaskRandomFloat64)
@@ -37,11 +38,33 @@ func init() {
 	msk.RegisterMaskField("Authorization", "filled32")
 	msk.RegisterMaskField("authorization", "filled32")
 
+	msk.RegisterMaskField("Token", "preserveEnds(4,4)")
+	msk.RegisterMaskField("token", "preserveEnds(4,4)")
+
+	msk.RegisterMaskField("AccessToken", "preserveEnds(4,4)")
+	msk.RegisterMaskField("access_token", "preserveEnds(4,4)")
+
+	msk.RegisterMaskField("RefreshToken", "preserveEnds(4,4)")
+	msk.RegisterMaskField("refresh_token", "preserveEnds(4,4)")
+
+	msk.RegisterMaskField("CreditCard", "preserveEnds(4,4)")
+	msk.RegisterMaskField("creditCard", "preserveEnds(4,4)")
+	msk.RegisterMaskField("credit_card", "preserveEnds(4,4)")
+
+	msk.RegisterMaskField("APIKey", "preserveEnds(2,2)")
+	msk.RegisterMaskField("apiKey", "preserveEnds(2,2)")
+	msk.RegisterMaskField("api_key", "preserveEnds(2,2)")
+
 	Default = &Masker{masker: msk}
 }
 
 func Mask[T any](target T) (ret T, err error) {
-	return mask.Mask(target)
+	var v any
+	v, err = Default.Mask(target)
+	if err != nil {
+		return ret, err
+	}
+	return v.(T), nil
 }
 
 // SetTagName allows you to change the tag name from "mask" to something else.
