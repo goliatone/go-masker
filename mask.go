@@ -55,6 +55,9 @@ func init() {
 	msk.RegisterMaskField("apiKey", "preserveEnds(2,2)")
 	msk.RegisterMaskField("api_key", "preserveEnds(2,2)")
 
+	msk.RegisterMaskField("ClientSecret", "preserveEnds(2,2)")
+	msk.RegisterMaskField("client_secret", "preserveEnds(2,2)")
+
 	Default = &Masker{masker: msk}
 }
 
