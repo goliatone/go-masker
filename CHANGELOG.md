@@ -1,22 +1,26 @@
 # Changelog
 
-# [unreleased]
+# [0.2.0](https://github.com/goliatone/go-masker/compare/v0.1.0...v0.2.0) - (2026-07-18)
 
-## Security
+## <!-- 13 -->📦 Bumps
 
-- Add a secure profile with fixed full redaction for credential-bearing fields and common key aliases.
-- Add frozen independent masker instances for library-safe configuration.
-- Contain mutable upstream cache destinations and add race-tested concurrent masking.
+- Bump version: v0.2.0 ([1b132f5](https://github.com/goliatone/go-masker/commit/1b132f59efe9498d6d5318d231a61bb73370277b))  - (goliatone)
 
-## Features
+## <!-- 16 -->➕ Add
 
-- Add `New`, `NewSecure`, functional options, profiles, fixed redaction, and normalized field registration.
+- Mask constructor ([2bd77ed](https://github.com/goliatone/go-masker/commit/2bd77ed0364d7fa8310e9c633faaf162aeb5a262))  - (goliatone)
+- Profile and options for output ([a9933b5](https://github.com/goliatone/go-masker/commit/a9933b5d52709fd44b605677003f2d58a3ad75b2))  - (goliatone)
+- Client secret ([578e305](https://github.com/goliatone/go-masker/commit/578e305573fdffd4f6c2fac98bbb04379a9d4c23))  - (goliatone)
+- Default masker ([db4b72c](https://github.com/goliatone/go-masker/commit/db4b72c61ce012fb238b3948a94cc7cd1edc670a))  - (goliatone)
 
-## Compatibility
+## <!-- 3 -->📚 Documentation
 
-- Existing package-level helpers continue to delegate to `Default`.
-- Instance configuration methods now return errors for invalid or frozen configuration; ordinary call statements remain valid.
-- `preserveEnds` now honors each masker's configured mask character.
+- Update changelog for v0.1.0 ([fd4a4df](https://github.com/goliatone/go-masker/commit/fd4a4df3c4d5120df644ed8897cce5f4342161bd))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update docs ([7ca4484](https://github.com/goliatone/go-masker/commit/7ca448431080dc5e3b9c5d7d19ea4f2221288049))  - (goliatone)
+- Update tests ([bc9758e](https://github.com/goliatone/go-masker/commit/bc9758e800eeecdb5d4467e9c1cf68b40f733b95))  - (goliatone)
 
 # [0.1.0](https://github.com/goliatone/go-masker/compare/v0.0.1...v0.1.0) - (2025-03-22)
 
@@ -28,7 +32,6 @@
 
 - New release task ([530ac9d](https://github.com/goliatone/go-masker/commit/530ac9d4fdd2964bde767005369d6583513ad22c))  - (goliatone)
 - Custom partial masker ([5d0fde3](https://github.com/goliatone/go-masker/commit/5d0fde3e7583ba231f21b076baf66895f3e80851))  - (goliatone)
-- Custom partial masker ([37b0b44](https://github.com/goliatone/go-masker/commit/37b0b44e48de75518ae3cb3475d00a6fc941623d))  - (goliatone)
 - Docs ([4bfc53f](https://github.com/goliatone/go-masker/commit/4bfc53fdbb9e7fcf59ace2721552ad1e01fdf53d))  - (goliatone)
 
 ## <!-- 30 -->📝 Other
@@ -49,7 +52,6 @@
 ## <!-- 14 -->🎉 Initial Commit
 
 - Initial commit ([50f4152](https://github.com/goliatone/go-masker/commit/50f4152f487c60c85b63b2ed69a40a339e8b5282))  - (goliatone)
-- Initial commit ([bbd1e02](https://github.com/goliatone/go-masker/commit/bbd1e02b877aa7765e9653208b1f9b595fa1c99c))  - (goliatone)
 
 ## <!-- 16 -->➕ Add
 
