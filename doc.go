@@ -1,78 +1,28 @@
-// Package masker provides a flexible data masking system for Go applications,
-// allowing you to protect sensitive information in various data types.
+// Package masker creates masked copies of structured Go values.
 //
-// The package wraps and extends github.com/showa-93/go-mask functionality,
-// providing additional convenience methods and pre-configured masking rules
-// for common sensitive fields.
+// For credential-bearing output, construct a dedicated frozen secure instance:
 //
-// By default, the package initializes with common masking rules for sensitive fields:
-//   - Password/password: 4 character mask
-//   - SigningKey/signing_key: 32 character mask
-//   - Authorization/authorization: 32 character mask
-//
-// Basic usage with the default masker:
-//
-//	type User struct {
-//		Username string
-//		Password string `mask:"filled4"`
-//	}
-//
-//	user := User{
-//		Username: "john",
-//		Password: "secret123",
-//	}
-//
-//	masked, err := masker.Mask(user)
+//	m, err := masker.NewSecure(
+//		masker.WithMaskField("tenantCredential", masker.MaskTypeRedact),
+//	)
 //	if err != nil {
-//		log.Fatal(err)
+//		return err
 //	}
+//	masked, err := m.Mask(value)
 //
-// Available Masking Types:
-//   - hash: Masks and hashes (sha1) a string
-//   - fixed: Masks with a fixed length (8 characters)
-//   - filled: Masks the entire string or with specified length
-//   - random: For numeric types, generates random values within range
-//   - zero: Sets the field to its zero value
+// New creates a general independent instance. Configure it with options or
+// registration methods, then call Freeze before sharing it across goroutines.
+// Package-level helpers delegate to the mutable Default instance and are kept
+// for compatibility; libraries should not use Default as global configuration.
 //
-// Custom Masking:
+// The secure profile fully replaces recognized credential fields with a fixed
+// marker. Preserve-ends and hash rules remain available for explicit non-secret
+// use cases. Masking is field-based and does not reliably discover secrets in
+// arbitrary prose, so callers should omit untrusted free-form strings and must
+// not fall back to raw values when masking fails.
 //
-//	m := &Masker{...}
-//	m.RegisterMaskStringFunc("custom", func(arg, value string) (string, error) {
-//		return strings.Repeat("*", len(value)), nil
-//	})
-//
-// Field Registration:
-//
-//	m := &Masker{...}
-//	m.RegisterMaskField("api_key", "filled32")
-//
-// Configuration:
-//
-// The package supports various configuration options:
-//
-//	m.SetTagName("mask")      // Change the struct tag name
-//	m.SetMaskChar("*")        // Change the masking character
-//	m.Cache(true)             // Enable/disable type information caching
-//
-// Supported Types:
-//   - string (MaskStringFunc)
-//   - uint (MaskUintFunc)
-//   - int (MaskIntFunc)
-//   - float64 (MaskFloat64Func)
-//   - any (MaskAnyFunc)
-//
-// Thread Safety:
-//
-// The package maintains a global Default masker instance that is safe for
-// concurrent use after initialization. Custom masker instances should be
-// handled with appropriate synchronization if modified after initialization.
-//
-// Performance:
-//
-// Type information caching is enabled by default to improve performance.
-// For dynamic structures where fields change frequently, caching can be
-// disabled using the Cache(false) method.
-//
-// For additional information and updates, visit:
-// https://github.com/goliatone/go-masker
+// Cache-disabled Mask calls can run concurrently. Cache-enabled Mask calls are
+// serialized to contain mutable reflection destinations in the wrapped
+// dependency. Configuration methods are synchronized, and Freeze prevents
+// subsequent changes.
 package masker
