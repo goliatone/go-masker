@@ -1,5 +1,23 @@
 # Changelog
 
+# [unreleased]
+
+## Security
+
+- Add a secure profile with fixed full redaction for credential-bearing fields and common key aliases.
+- Add frozen independent masker instances for library-safe configuration.
+- Contain mutable upstream cache destinations and add race-tested concurrent masking.
+
+## Features
+
+- Add `New`, `NewSecure`, functional options, profiles, fixed redaction, and normalized field registration.
+
+## Compatibility
+
+- Existing package-level helpers continue to delegate to `Default`.
+- Instance configuration methods now return errors for invalid or frozen configuration; ordinary call statements remain valid.
+- `preserveEnds` now honors each masker's configured mask character.
+
 # [0.1.0](https://github.com/goliatone/go-masker/compare/v0.0.1...v0.1.0) - (2025-03-22)
 
 ## <!-- 13 -->📦 Bumps

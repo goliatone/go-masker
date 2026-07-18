@@ -1,6 +1,6 @@
 # Go Masker
 
-Simple package to mask sensitive data in Go structs. Wraps and extends [go-mask](https://github.com/showa-93/go-mask) with pre-configured rules and easier setup.
+`go-masker` creates masked copies of Go structs, maps, slices, pointers, and scalar values. It wraps `github.com/showa-93/go-mask` with independent instances, predefined field profiles, fixed redaction, and configure-then-freeze semantics.
 
 ## Install
 
@@ -8,95 +8,130 @@ Simple package to mask sensitive data in Go structs. Wraps and extends [go-mask]
 go get github.com/goliatone/go-masker
 ```
 
-## Usage
+## Security model
 
-Basic struct masking:
+Masking is most reliable for structured data with known fields or map keys. It is not a general secret scanner and cannot guarantee detection of credentials embedded in arbitrary prose.
 
-```go
-type User struct {
-    Username string
-    Password string `mask:"filled4"`  // Will mask with 4 chars
-    APIKey   string `mask:"filled32"` // Will mask with 32 chars
-}
+- Use `NewSecure` for credential-bearing output.
+- Omit untrusted free-form strings unless a dedicated sanitizer makes them safe.
+- Treat masking as defense in depth after field selection and allowlisting.
+- If masking returns an error, do not fall back to the original value.
 
-user := User{
-    Username: "john",
-    Password: "secret123",
-    APIKey:   "1234567890",
-}
+The secure profile replaces credentials with the fixed marker `[REDACTED]`. It does not preserve token fragments or disclose their original length.
 
-// Using default masker
-masked, err := masker.Mask(user)
-
-// Output:
-// {
-//   "username": "john",
-//   "password": "****",
-//   "api_key": "********************************"
-// }
-```
-
-Custom masking:
+## Secure instance
 
 ```go
-// Create custom masker
-m := masker.New()
+m, err := masker.NewSecure()
+if err != nil {
+    return err
+}
 
-// Register custom field mask
-m.RegisterMaskField("api_key", "filled32")
-
-// Register custom masking function
-m.RegisterMaskStringFunc("custom", func(arg, value string) (string, error) {
-    return strings.Repeat("*", len(value)), nil
+masked, err := m.Mask(map[string]any{
+    "clientSecret": "secret-value",
+    "visible":      "safe-value",
 })
+if err != nil {
+    return err // fail closed; do not use the input as fallback
+}
 ```
 
-## Mask Types
-
-- `hash`: SHA1 hash of the string
-- `fixed`: Fixed 8 char mask
-- `filled`: Mask with specified length (e.g., `filled4`, `filled32`)
-- `random`: Random number for numeric types
-- `zero`: Sets to zero value
-
-## Default Masked Fields
-
-These come pre-configured:
-- Password/password: 4 chars
-- SigningKey/signing_key: 32 chars
-- Authorization/authorization: 32 chars
-
-## Configuration
+`NewSecure` disables the upstream reflection cache and freezes the instance. Configure it entirely through options:
 
 ```go
-m := masker.New()
-
-// Change tag name (default: "mask")
-m.SetTagName("secure")
-
-// Change mask character (default: "*")
-m.SetMaskChar("#")
-
-// Toggle type caching
-m.Cache(false)
+m, err := masker.NewSecure(
+    masker.WithTagName("mask"),
+    masker.WithMaskChar("#"),
+    masker.WithMaskField("tenantCredential", masker.MaskTypeRedact),
+)
 ```
 
-## Supported Types
+Security-sensitive aliases include common snake_case, kebab-case, camelCase, PascalCase, and header-style names for passwords, secrets, tokens, authorization values, cookies, signing/private keys, credentials, API keys, and credit cards.
 
-- string (MaskStringFunc)
-- uint (MaskUintFunc)
-- int (MaskIntFunc)
-- float64 (MaskFloat64Func)
-- any (MaskAnyFunc)
+## General instances
 
-## Features
+`New` creates an independent configurable instance with the compatibility profile:
 
-- Pre-configured for common sensitive fields
-- Custom masking functions
-- Field-based masking
-- Thread safe
-- Type info caching
-- Supports multiple data types
+```go
+m, err := masker.New(
+    masker.WithProfile(masker.ProfileDefault),
+    masker.WithCache(false),
+)
+if err != nil {
+    return err
+}
+
+if err := m.RegisterMaskField("account_id", "preserveEnds(2,2)"); err != nil {
+    return err
+}
+m.Freeze()
+```
+
+Available profiles:
+
+- `ProfileDefault`: compatibility rules, including partial token and identifier masking.
+- `ProfileSecure`: fixed full redaction for credential fields.
+- `ProfileNone`: no field-name rules; built-in masking functions remain registered.
+
+Options can configure:
+
+- tag name and mask character;
+- cache behavior;
+- field rules;
+- custom string, integer, unsigned integer, float, and any-value functions.
+
+Invalid options cause `New` to return `ErrInvalidOption` without returning a partial instance. Configuration after `Freeze` returns `ErrFrozen`.
+
+## Struct tags and custom rules
+
+Struct tags take precedence over field-name profiles:
+
+```go
+type Customer struct {
+    Name       string
+    Password   string
+    Identifier string `mask:"preserveEnds(2,2)"`
+}
+```
+
+Custom functions can be registered as options or before freezing:
+
+```go
+m, err := masker.New(
+    masker.WithProfile(masker.ProfileNone),
+    masker.WithMaskStringFunc("custom", func(arg, value string) (string, error) {
+        return "[CUSTOM]", nil
+    }),
+    masker.WithMaskField("label", "custom"),
+)
+```
+
+## Mask types
+
+- `redact`: fixed `[REDACTED]` output for strings and bytes; type-safe zero values for other sensitive values.
+- `filled`: repeated mask character, optionally with a requested length such as `filled4`.
+- `fixed`: fixed eight-character mask.
+- `preserveEnds(start,end)`: preserves selected string ends; use only for non-secret identifiers.
+- `hash`: SHA-1 representation inherited for compatibility; not suitable as credential protection.
+- `random`: random numeric replacement.
+- `zero`: the value's zero value.
+
+## Concurrency
+
+Configuration methods and masking are synchronized. Freeze an instance before sharing it.
+
+- Cache-disabled instances allow concurrent mask operations and are recommended for security-sensitive output paths.
+- Cache-enabled operations are serialized because the wrapped dependency reuses mutable reflection destinations.
+- Independent instances do not share configuration.
+- The mutable package-level `Default` exists for compatibility and should not be used as an application-wide configuration surface by libraries.
+
+## Compatibility helpers
+
+Package functions such as `Mask`, `RegisterMaskField`, and `SetMaskChar` delegate to `Default`. New integrations should prefer an independent instance:
+
+```go
+masked, err := masker.Mask(value) // compatibility path
+```
 
 ## License
 
