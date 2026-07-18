@@ -1,202 +1,452 @@
 package masker
 
 import (
+	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/showa-93/go-mask"
 )
 
-var Default *Masker
+// Default backs the package-level compatibility helpers. New integrations should
+// construct and freeze an independent Masker instead of mutating Default.
+var Default = mustNew()
 
 type (
-	MaskStringFunc  func(arg string, value string) (string, error)
-	MaskUintFunc    func(arg string, value uint) (uint, error)
-	MaskIntFunc     func(arg string, value int) (int, error)
-	MaskFloat64Func func(arg string, value float64) (float64, error)
-	MaskAnyFunc     func(arg string, value any) (any, error)
+	MaskStringFunc  = mask.MaskStringFunc
+	MaskUintFunc    = mask.MaskUintFunc
+	MaskIntFunc     = mask.MaskIntFunc
+	MaskFloat64Func = mask.MaskFloat64Func
+	MaskAnyFunc     = mask.MaskAnyFunc
 )
 
+// Masker wraps go-mask with independent configuration and a concurrency-safe
+// lifecycle. Configuration methods take an exclusive lock; masking is safe for
+// concurrent use. Freeze prevents later configuration changes.
 type Masker struct {
-	masker *mask.Masker
+	mu        sync.RWMutex
+	masker    *mask.Masker
+	cache     bool
+	maskChar  string
+	frozen    bool
+	maskTypes map[string]struct{}
 }
 
-func init() {
-	msk := mask.NewMasker()
-	msk.RegisterMaskStringFunc(mask.MaskTypeHash, msk.MaskHashString)
-	msk.RegisterMaskStringFunc(mask.MaskTypeFixed, msk.MaskFixedString)
-	msk.RegisterMaskStringFunc(mask.MaskTypeFilled, msk.MaskFilledString)
-	msk.RegisterMaskStringFunc(MaskTypePreserveEnds, MaskPreserveEnds)
+// New constructs an independent masker with built-in functions and the default
+// field profile. Options are applied before the instance becomes visible.
+func New(options ...Option) (*Masker, error) {
+	cfg := defaultConfig()
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: option cannot be nil", ErrInvalidOption)
+		}
+		if err := option(&cfg); err != nil {
+			return nil, err
+		}
+	}
 
-	msk.RegisterMaskIntFunc(mask.MaskTypeRandom, msk.MaskRandomInt)
-	msk.RegisterMaskFloat64Func(mask.MaskTypeRandom, msk.MaskRandomFloat64)
-	msk.RegisterMaskAnyFunc(mask.MaskTypeZero, msk.MaskZero)
+	underlying := mask.NewMasker()
+	underlying.SetTagName(cfg.tagName)
+	underlying.SetMaskChar(cfg.maskChar)
+	underlying.Cache(cfg.cache)
 
-	msk.RegisterMaskField("Password", "filled4")
-	msk.RegisterMaskField("password", "filled4")
+	m := &Masker{
+		masker:    underlying,
+		cache:     cfg.cache,
+		maskChar:  cfg.maskChar,
+		maskTypes: make(map[string]struct{}),
+	}
+	m.registerBuiltins()
 
-	msk.RegisterMaskField("SigningKey", "filled32")
-	msk.RegisterMaskField("signing_key", "filled32")
+	for _, registration := range cfg.strings {
+		m.registerMaskStringFunc(registration.maskType, registration.fn)
+	}
+	for _, registration := range cfg.uints {
+		m.registerMaskUintFunc(registration.maskType, registration.fn)
+	}
+	for _, registration := range cfg.ints {
+		m.registerMaskIntFunc(registration.maskType, registration.fn)
+	}
+	for _, registration := range cfg.floats {
+		m.registerMaskFloat64Func(registration.maskType, registration.fn)
+	}
+	for _, registration := range cfg.anyValues {
+		m.registerMaskAnyFunc(registration.maskType, registration.fn)
+	}
+	if cfg.profile == ProfileDefault {
+		m.registerProfile(ProfileDefault)
+	}
+	for _, registration := range cfg.fields {
+		if !m.supportsMaskType(registration.maskType) {
+			return nil, fmt.Errorf("%w: unknown mask type %q for field %q", ErrInvalidOption, registration.maskType, registration.fieldName)
+		}
+		m.registerMaskField(registration.fieldName, registration.maskType)
+	}
+	if cfg.profile == ProfileSecure {
+		m.enforceSecureRedaction()
+		m.registerProfile(ProfileSecure)
+		m.frozen = true
+	}
 
-	msk.RegisterMaskField("Authorization", "filled32")
-	msk.RegisterMaskField("authorization", "filled32")
+	return m, nil
+}
 
-	msk.RegisterMaskField("Token", "preserveEnds(4,4)")
-	msk.RegisterMaskField("token", "preserveEnds(4,4)")
+// NewSecure constructs and freezes an independent security-profiled masker.
+// Callers can supply additional options to override defaults before freezing.
+func NewSecure(options ...Option) (*Masker, error) {
+	secureOptions := make([]Option, 0, len(options)+2)
+	secureOptions = append(secureOptions, options...)
+	secureOptions = append(secureOptions, WithProfile(ProfileSecure), WithCache(false))
+	m, err := New(secureOptions...)
+	if err != nil {
+		return nil, err
+	}
+	return m.Freeze(), nil
+}
 
-	msk.RegisterMaskField("AccessToken", "preserveEnds(4,4)")
-	msk.RegisterMaskField("access_token", "preserveEnds(4,4)")
+func mustNew(options ...Option) *Masker {
+	m, err := New(options...)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
 
-	msk.RegisterMaskField("RefreshToken", "preserveEnds(4,4)")
-	msk.RegisterMaskField("refresh_token", "preserveEnds(4,4)")
+func (m *Masker) registerBuiltins() {
+	m.registerMaskStringFunc(mask.MaskTypeHash, m.masker.MaskHashString)
+	m.registerMaskStringFunc(mask.MaskTypeFixed, m.masker.MaskFixedString)
+	m.registerMaskStringFunc(mask.MaskTypeFilled, m.masker.MaskFilledString)
+	m.registerMaskStringFunc(MaskTypePreserveEnds, func(arg, value string) (string, error) {
+		return maskPreserveEnds(m.maskChar, arg, value)
+	})
 
-	msk.RegisterMaskField("CreditCard", "preserveEnds(4,4)")
-	msk.RegisterMaskField("creditCard", "preserveEnds(4,4)")
-	msk.RegisterMaskField("credit_card", "preserveEnds(4,4)")
+	m.registerMaskIntFunc(mask.MaskTypeRandom, m.masker.MaskRandomInt)
+	m.registerMaskFloat64Func(mask.MaskTypeRandom, m.masker.MaskRandomFloat64)
+	m.registerMaskAnyFunc(mask.MaskTypeZero, m.masker.MaskZero)
+	m.registerMaskAnyFunc(MaskTypeRedact, MaskRedactAny)
+}
 
-	msk.RegisterMaskField("APIKey", "preserveEnds(2,2)")
-	msk.RegisterMaskField("apiKey", "preserveEnds(2,2)")
-	msk.RegisterMaskField("api_key", "preserveEnds(2,2)")
+func (m *Masker) enforceSecureRedaction() {
+	// String fields and string collections use the string registry directly;
+	// other structured values use the any-value registry.
+	m.registerMaskStringFunc(MaskTypeRedact, MaskRedact)
+	m.registerMaskAnyFunc(MaskTypeRedact, MaskRedactAny)
+}
 
-	msk.RegisterMaskField("ClientSecret", "preserveEnds(2,2)")
-	msk.RegisterMaskField("client_secret", "preserveEnds(2,2)")
+func (m *Masker) registerMaskStringFunc(maskType string, fn MaskStringFunc) {
+	m.masker.RegisterMaskStringFunc(maskType, fn)
+	m.maskTypes[maskType] = struct{}{}
+}
 
-	Default = &Masker{masker: msk}
+func (m *Masker) registerMaskUintFunc(maskType string, fn MaskUintFunc) {
+	m.masker.RegisterMaskUintFunc(maskType, fn)
+	m.maskTypes[maskType] = struct{}{}
+}
+
+func (m *Masker) registerMaskIntFunc(maskType string, fn MaskIntFunc) {
+	m.masker.RegisterMaskIntFunc(maskType, fn)
+	m.maskTypes[maskType] = struct{}{}
+}
+
+func (m *Masker) registerMaskFloat64Func(maskType string, fn MaskFloat64Func) {
+	m.masker.RegisterMaskFloat64Func(maskType, fn)
+	m.maskTypes[maskType] = struct{}{}
+}
+
+func (m *Masker) registerMaskAnyFunc(maskType string, fn MaskAnyFunc) {
+	m.masker.RegisterMaskAnyFunc(maskType, fn)
+	m.maskTypes[maskType] = struct{}{}
+}
+
+func (m *Masker) supportsMaskType(maskType string) bool {
+	for registered := range m.maskTypes {
+		if strings.HasPrefix(maskType, registered) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Masker) registerProfile(profile Profile) {
+	switch profile {
+	case ProfileDefault:
+		for fieldName, maskType := range defaultProfileFields() {
+			m.registerMaskField(fieldName, maskType)
+		}
+	case ProfileSecure:
+		for fieldName, maskType := range secureProfileFields() {
+			m.registerMaskField(fieldName, maskType)
+		}
+	case ProfileNone:
+		return
+	}
+}
+
+func defaultProfileFields() map[string]string {
+	return map[string]string{
+		"password":      "filled4",
+		"signing_key":   "filled32",
+		"authorization": "filled32",
+		"token":         "preserveEnds(4,4)",
+		"access_token":  "preserveEnds(4,4)",
+		"refresh_token": "preserveEnds(4,4)",
+		"credit_card":   "preserveEnds(4,4)",
+		"api_key":       "preserveEnds(2,2)",
+		"APIKey":        "preserveEnds(2,2)",
+		"client_secret": "preserveEnds(2,2)",
+	}
+}
+
+// Freeze prevents subsequent configuration changes. Masking remains available.
+func (m *Masker) Freeze() *Masker {
+	m.mu.Lock()
+	m.frozen = true
+	m.mu.Unlock()
+	return m
+}
+
+// Frozen reports whether configuration has been frozen.
+func (m *Masker) Frozen() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.frozen
+}
+
+func (m *Masker) ensureMutable() error {
+	if m.frozen {
+		return ErrFrozen
+	}
+	return nil
 }
 
 func Mask[T any](target T) (ret T, err error) {
-	var v any
-	v, err = Default.Mask(target)
+	var value any
+	value, err = Default.Mask(target)
 	if err != nil {
 		return ret, err
 	}
-	return v.(T), nil
+	if value == nil {
+		return ret, nil
+	}
+	typed, ok := value.(T)
+	if !ok {
+		return ret, fmt.Errorf("mask result type %T does not match input type", value)
+	}
+	return typed, nil
 }
 
-// SetTagName allows you to change the tag name from "mask" to something else.
-func (m *Masker) SetTagName(s string) {
-	m.masker.SetTagName(s)
+// SetTagName changes the struct tag name used for masking.
+func (m *Masker) SetTagName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%w: tag name cannot be empty", ErrInvalidOption)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.masker.SetTagName(name)
+	return nil
 }
 
-// SetMaskChar changes the character used for masking
-func (m *Masker) SetMaskChar(s string) {
-	m.masker.SetMaskChar(s)
+// SetMaskChar changes the character used for masking.
+func (m *Masker) SetMaskChar(char string) error {
+	if char == "" {
+		return fmt.Errorf("%w: mask character cannot be empty", ErrInvalidOption)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.maskChar = char
+	m.masker.SetMaskChar(char)
+	return nil
 }
 
-// Cache can be toggled to cache the type information of the struct.
-// default true
-func (m *Masker) Cache(enable bool) {
-	m.masker.Cache(enable)
+// Cache toggles the wrapped masker's reflection cache.
+func (m *Masker) Cache(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.cache = enabled
+	m.masker.Cache(enabled)
+	return nil
 }
 
-// MaskChar returns the current character used for masking.
+// MaskChar returns the current mask character.
 func (m *Masker) MaskChar() string {
-	return m.masker.MaskChar()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maskChar
 }
 
-// RegisterMaskStringFunc registers a masking function for string values.
-// The function will be applied when the string set in the first argument is assigned as a tag to a field in the structure.
-func (m *Masker) RegisterMaskStringFunc(maskType string, maskFunc MaskStringFunc) {
-	v := func(arg string, value string) (string, error) {
-		return maskFunc(arg, value)
+func (m *Masker) RegisterMaskStringFunc(maskType string, maskFunc MaskStringFunc) error {
+	if strings.TrimSpace(maskType) == "" || maskFunc == nil {
+		return fmt.Errorf("%w: string mask type and function are required", ErrInvalidOption)
 	}
-	m.masker.RegisterMaskStringFunc(maskType, v)
-}
-
-// RegisterMaskUintFunc registers a masking function for uint values.
-// The function will be applied when the uint slice set in the first argument is assigned as a tag to a field in the structure.
-func (m *Masker) RegisterMaskUintFunc(maskType string, maskFunc MaskUintFunc) {
-	v := func(arg string, value uint) (uint, error) {
-		return maskFunc(arg, value)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
 	}
-	m.masker.RegisterMaskUintFunc(maskType, v)
+	m.registerMaskStringFunc(maskType, maskFunc)
+	return nil
 }
 
-// RegisterMaskIntFunc registers a masking function for int values.
-// The function will be applied when the string set in the first argument is assigned as a tag to a field in the structure.
-func (m *Masker) RegisterMaskIntFunc(maskType string, maskFunc MaskIntFunc) {
-	v := func(arg string, value int) (int, error) {
-		return maskFunc(arg, value)
+func (m *Masker) RegisterMaskUintFunc(maskType string, maskFunc MaskUintFunc) error {
+	if strings.TrimSpace(maskType) == "" || maskFunc == nil {
+		return fmt.Errorf("%w: uint mask type and function are required", ErrInvalidOption)
 	}
-	m.masker.RegisterMaskIntFunc(maskType, v)
-}
-
-// RegisterMaskFloat64Func registers a masking function for float64 values.
-// The function will be applied when the string set in the first argument is assigned as a tag to a field in the structure.
-func (m *Masker) RegisterMaskFloat64Func(maskType string, maskFunc MaskFloat64Func) {
-	v := func(arg string, value float64) (float64, error) {
-		return maskFunc(arg, value)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
 	}
-	m.masker.RegisterMaskFloat64Func(maskType, v)
+	m.registerMaskUintFunc(maskType, maskFunc)
+	return nil
 }
 
-// RegisterMaskAnyFunc registers a masking function that can be applied to any type.
-// The function will be applied when the string set in the first argument is assigned as a tag to a field in the structure.
-func (m *Masker) RegisterMaskAnyFunc(maskType string, maskFunc MaskAnyFunc) {
-	v := func(arg string, value any) (any, error) {
-		return maskFunc(arg, value)
+func (m *Masker) RegisterMaskIntFunc(maskType string, maskFunc MaskIntFunc) error {
+	if strings.TrimSpace(maskType) == "" || maskFunc == nil {
+		return fmt.Errorf("%w: int mask type and function are required", ErrInvalidOption)
 	}
-	m.masker.RegisterMaskAnyFunc(maskType, v)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.registerMaskIntFunc(maskType, maskFunc)
+	return nil
 }
 
-// RegisterMaskField allows you to register a mask tag to be applied to the value of a struct field or map key that matches the fieldName.
-// If a mask tag is set on the struct field, it will take precedence.
-func (m *Masker) RegisterMaskField(fieldName, maskType string) {
-	m.masker.RegisterMaskField(fieldName, maskType)
+func (m *Masker) RegisterMaskFloat64Func(maskType string, maskFunc MaskFloat64Func) error {
+	if strings.TrimSpace(maskType) == "" || maskFunc == nil {
+		return fmt.Errorf("%w: float mask type and function are required", ErrInvalidOption)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.registerMaskFloat64Func(maskType, maskFunc)
+	return nil
 }
 
-// String masks the given argument string
+func (m *Masker) RegisterMaskAnyFunc(maskType string, maskFunc MaskAnyFunc) error {
+	if strings.TrimSpace(maskType) == "" || maskFunc == nil {
+		return fmt.Errorf("%w: any mask type and function are required", ErrInvalidOption)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	m.registerMaskAnyFunc(maskType, maskFunc)
+	return nil
+}
+
+// RegisterMaskField registers a rule for common naming variants of fieldName.
+func (m *Masker) RegisterMaskField(fieldName, maskType string) error {
+	if strings.TrimSpace(fieldName) == "" || strings.TrimSpace(maskType) == "" {
+		return fmt.Errorf("%w: field name and mask type are required", ErrInvalidOption)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureMutable(); err != nil {
+		return err
+	}
+	if !m.supportsMaskType(maskType) {
+		return fmt.Errorf("%w: unknown mask type %q for field %q", ErrInvalidOption, maskType, fieldName)
+	}
+	m.registerMaskField(fieldName, maskType)
+	return nil
+}
+
+func (m *Masker) registerMaskField(fieldName, maskType string) {
+	for _, alias := range fieldAliases(fieldName) {
+		m.masker.RegisterMaskField(alias, maskType)
+	}
+}
+
 func (m *Masker) String(tag, value string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.String(tag, value)
 }
 
-// Uint masks the given argument uint
 func (m *Masker) Uint(tag string, value uint) (uint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.Uint(tag, value)
 }
 
-// Int masks the given argument int
 func (m *Masker) Int(tag string, value int) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.Int(tag, value)
 }
 
-// Float64 masks the given argument float64
 func (m *Masker) Float64(tag string, value float64) (float64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.Float64(tag, value)
 }
 
-// MaskFilledString masks the string length of the value with the same length.
-// If you pass a number like "2" to arg, it masks with the length of the number.(**)
 func (m *Masker) MaskFilledString(arg, value string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskFilledString(arg, value)
 }
 
-// MaskFixedString masks with a fixed length (8 characters).
 func (m *Masker) MaskFixedString(arg, value string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskFixedString(arg, value)
 }
 
-// MaskHashString masks and hashes (sha1) a string.
 func (m *Masker) MaskHashString(arg, value string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskHashString(arg, value)
 }
 
-// MaskRandomInt converts an integer (int) into a random number.
-// For example, if you pass "100" as the arg, it sets a random number in the range of 0-99.
 func (m *Masker) MaskRandomInt(arg string, value int) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskRandomInt(arg, value)
 }
 
-// MaskRandomFloat64 converts a float64 to a random number.
-// For example, if you pass "100.3" to arg, it sets a random number in the range of 0.000 to 99.999.
 func (m *Masker) MaskRandomFloat64(arg string, value float64) (float64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskRandomFloat64(arg, value)
 }
 
-// MaskZero converts the value to its type's zero value.
 func (m *Masker) MaskZero(arg string, value any) (any, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.masker.MaskZero(arg, value)
 }
 
-// Mask returns an object with the mask applied to any given object.
-// The function's argument can accept any type, including pointer, map, and slice types, in addition to struct.
-func (m *Masker) Mask(target any) (ret any, err error) {
+// Mask returns a deep masked copy. Calls are serialized when the wrapped
+// dependency's reflection cache is enabled because that cache reuses mutable
+// destinations. Cache-disabled calls may execute concurrently.
+func (m *Masker) Mask(target any) (any, error) {
+	if target == nil {
+		return nil, nil
+	}
+
+	m.mu.RLock()
+	if !m.cache {
+		defer m.mu.RUnlock()
+		return m.masker.Mask(target)
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.masker.Mask(target)
 }
